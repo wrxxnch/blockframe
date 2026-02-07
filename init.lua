@@ -1,10 +1,12 @@
 --------------------------------------------------
--- INIT.LUA COMPLETO - BLOCKFRAME
+-- INIT.LUA COMPLETO - BLOCKFRAME (UPDATED V3)
 --------------------------------------------------
 
 blockframe = {}
-blockframe.active = {}
+blockframe.active = {} -- [name] = { type="single"|"composite", entities={}, ... }
 blockframe.memory = {}
+blockframe.del_history = {}
+blockframe.world_path = minetest.get_worldpath()
 
 --------------------------------------------------
 -- HELP
@@ -18,25 +20,23 @@ Uso:
 /blockframe_set
 /blockframe_cancel
 /blockframe_undo
-/blockframe_del
+/blockframe_del radius=N
+/blockframe_del_undo
+/blockframe_save <nome> radius=N
+/blockframe_load <nome> <args>
 /blockframe_help
 
-ARGS:
- size=x,y,z        tamanho (1 valor = x=y=z)
+ARGS (Preview & Load):
+ size=x,y,z        tamanho/escala
  rotate=x,y,z      rotação XYZ
  mirror=x|y|z      espelho
- pos=x,y,z         posição absoluta
+ pos=x,y,z         posição absoluta ou offset
  step=valor        snap da mira
+ collision=true    ativa colisão (no set/load)
 
 Exemplos:
-/blockframe size=0.1
-/blockframe size=1,0.5
-/blockframe size=1,2,0.5 rotate=0,90,0
-/blockframe pos=0,1,0 step=0.1
-/blockframe mirror=x rotate=45,0,90
-
-Confirmar:
-/blockframe_set
+/blockframe size=0.5 rotate=0,45,0
+/blockframe_load minha_casa size=2 rotate=0,90,0
 ]]
 end
 
@@ -47,7 +47,12 @@ function blockframe.parse_args(param)
 	local args = {}
 	for w in param:gmatch("%S+") do
 		local k,v = w:match("([^=]+)=([^=]+)")
-		if k then args[k] = v end
+		if k then 
+			if v == "true" then v = true 
+			elseif v == "false" then v = false 
+			end
+			args[k] = v 
+		end
 	end
 	return args
 end
@@ -57,6 +62,7 @@ end
 --------------------------------------------------
 local function parse_vec(str, def)
 	if not str then return def end
+	if type(str) == "table" then return str end
 	local vals = {}
 	for n in str:gmatch("([^,]+)") do
 		table.insert(vals, tonumber(n))
@@ -82,104 +88,127 @@ local function get_wielded_item(player)
 	return stack:get_name()
 end
 
+-- Aplica transformações (escala, rotação, espelho)
+local function apply_transform(base_val, transform_val, is_rotation)
+	if not transform_val then return base_val end
+	if is_rotation then
+		return {
+			x = (base_val.x or 0) + (transform_val.x or 0),
+			y = (base_val.y or 0) + (transform_val.y or 0),
+			z = (base_val.z or 0) + (transform_val.z or 0)
+		}
+	else
+		-- Escala multiplicativa
+		return {
+			x = (base_val.x or 1) * (transform_val.x or 1),
+			y = (base_val.y or 1) * (transform_val.y or 1),
+			z = (base_val.z or 1) * (transform_val.z or 1)
+		}
+	end
+end
+
+local function update_entity_properties(self)
+	local base = self.args.size or {x=0.5,y=0.5,z=0.5}
+	local v = table.copy(base)
+	
+	if self.args.mirror=="x" then v.x=-v.x end
+	if self.args.mirror=="y" then v.y=-v.y end
+	if self.args.mirror=="z" then v.z=-v.z end
+	
+	local props = {visual_size = v}
+	
+	if self.args.collision then
+		props.physical = true
+		local sx, sy, sz = math.abs(v.x), math.abs(v.y), math.abs(v.z)
+		props.collisionbox = {-sx, -sy, -sz, sx, sy, sz}
+		props.pointable = true
+	else
+		props.physical = false
+		props.collisionbox = {0,0,0,0,0,0}
+	end
+	
+	self.object:set_properties(props)
+	
+	if self.args.rotate then
+	local rot = self.args.rotate
+
+	if type(rot) == "number" then
+		rot = {x = 0, y = rot, z = 0}
+	elseif type(rot) == "string" then
+		rot = parse_vec(rot, {x=0,y=0,z=0})
+	elseif type(rot) ~= "table" then
+		rot = {x=0,y=0,z=0}
+	end
+
+	self.object:set_rotation({
+		x = math.rad(rot.x or 0),
+		y = math.rad(rot.y or 0),
+		z = math.rad(rot.z or 0)
+	})
+end
+
+end
+
 --------------------------------------------------
 -- ENTIDADES
 --------------------------------------------------
--- PREVIEW
 minetest.register_entity("blockframe:preview", {
 	initial_properties = {
-		visual = "wielditem",
-		physical = false,
-		pointable = false,
-		glow = 5,
-		visual_size = {x=0.5,y=0.5},
-		collisionbox = {0,0,0,0,0,0},
-		static_save = true,
+		visual = "wielditem", physical = false, pointable = false, glow = 5,
+		visual_size = {x=0.5,y=0.5}, collisionbox = {0,0,0,0,0,0}, static_save = false,
 	},
 	on_activate = function(self, staticdata)
 		local data = minetest.deserialize(staticdata) or {}
 		self.node = data.node or "default:stone"
 		self.args = {}
 		self.step = 0
-		self.player = nil
-		self.last_pos = nil
-		self.offset = {x=0,y=0,z=0} -- offset relativo
+		self.player_name = data.player_name
+		self.rel_pos = data.rel_pos or {x=0,y=0,z=0} -- para composite
+		self.offset = {x=0,y=0,z=0}
 		self.object:set_properties({wield_item=self.node, opacity=120})
 	end,
-	set_node = function(self,node)
-		self.node = node
-		self.object:set_properties({wield_item=node})
-	end,
-	apply_args = function(self,args)
-		-- SIZE
-		if args.size then
-			self.args.size = parse_vec(args.size,{x=0.5,y=0.5,z=0.5})
-		end
-		-- MIRROR
-		if args.mirror=="x" or args.mirror=="y" or args.mirror=="z" then
-			self.args.mirror = args.mirror
-		end
-		-- STEP
-		if args.step then
-			local s = tonumber(args.step)
-			if s then self.step = s end
-		end
-		-- POS
-		if args.pos then
-			local p = parse_vec(args.pos,{x=0,y=0,z=0})
-			self.offset = p -- offset relativo
-			self.args.pos = p -- para placed
-		end
-		-- ROTATE
-		if args.rotate then
-			local rx,ry,rz = args.rotate:match("([^,]+),([^,]+),([^,]+)")
-			if rx and ry and rz then
-				self.args.rotate = {x=tonumber(rx) or 0, y=tonumber(ry) or 0, z=tonumber(rz) or 0}
-			else
-				local r = tonumber(args.rotate)
-				if r then self.args.rotate = {x=0,y=r,z=0} else self.args.rotate={x=0,y=0,z=0} end
+apply_args = function(self, args, global_args)
+	local final_args = table.copy(args or {})
+
+	-- 🔴 CONVERSÕES IMPORTANTES
+	if final_args.size then
+		final_args.size = parse_vec(final_args.size, {x=0.5,y=0.5,z=0.5})
+	end
+
+	if final_args.rotate then
+		final_args.rotate = parse_vec(final_args.rotate, {x=0,y=0,z=0})
+	end
+
+		
+		-- Merge com argumentos globais (do comando /blockframe_load)
+		if global_args then
+			if global_args.size then 
+				local scale = parse_vec(global_args.size, {x=1,y=1,z=1})
+				final_args.size = apply_transform(final_args.size or {x=0.5,y=0.5,z=0.5}, scale, false)
 			end
+			if global_args.rotate then
+				local rot_offset = parse_vec(global_args.rotate, {x=0,y=0,z=0})
+				final_args.rotate = apply_transform(final_args.rotate or {x=0,y=0,z=0}, rot_offset, true)
+			end
+			if global_args.mirror then final_args.mirror = global_args.mirror end
+			if global_args.collision ~= nil then final_args.collision = global_args.collision end
 		end
-		-- VISUAL SIZE + MIRROR
-		local base = self.args.size or {x=0.5,y=0.5,z=0.5}
-		local v = table.copy(base)
-		if self.args.mirror=="x" then v.x=-v.x end
-		if self.args.mirror=="y" then v.y=-v.y end
-		if self.args.mirror=="z" then v.z=-v.z end
-		self.object:set_properties({visual_size=v})
-		-- ROTATION
-		if self.args.rotate then
-			self.object:set_rotation({
-				x = math.rad(self.args.rotate.x or 0),
-				y = math.rad(self.args.rotate.y or 0),
-				z = math.rad(self.args.rotate.z or 0)
-			})
-		end
+
+		self.args = final_args
+		update_entity_properties(self)
 	end,
 	on_step = function(self)
-		if not self.player or not self.player:is_player() then return end
-		local eye = vector.add(self.player:get_pos(),
-			self.player:get_properties().eye_height and {x=0,y=self.player:get_properties().eye_height,z=0} or {x=0,y=1.6,z=0})
-		local dir = self.player:get_look_dir()
-		local start = vector.add(eye, vector.multiply(dir,0.2))
-		local finish = vector.add(start, vector.multiply(dir,6))
-		local ray = minetest.raycast(start, finish, true, true)
-		for hit in ray do
-			if hit.type=="object" and hit.ref==self.player then goto continue end
-			local p = hit.intersection_point or hit.above
-			if p then
-				p = snap(p,self.step)
-				p = vector.add(p,self.offset) -- aplica offset se definido
-				self.object:set_pos(p)
-				self.last_pos = p
-				return
-			end
-			::continue::
-		end
+		local player = minetest.get_player_by_name(self.player_name)
+		if not player then return end
+		
+		local active = blockframe.active[self.player_name]
+		if not active then return end
+
+		-- Apenas a entidade "mestre" ou controlada pelo step calcula a posição
+		-- Se for composite, o controlador central cuida da posição de todos
 	end
 })
 
--- PLACED
 minetest.register_entity("blockframe:placed", {
 	initial_properties = {
 		visual="wielditem", physical=false, pointable=true, static_save=true,
@@ -190,25 +219,8 @@ minetest.register_entity("blockframe:placed", {
 		self.node = data.node or "default:stone"
 		self.args = data.args or {}
 		self.object:set_properties({wield_item=self.node})
-		-- SIZE + MIRROR
-		local base = self.args.size or {x=0.5,y=0.5,z=0.5}
-		local v = table.copy(base)
-		if self.args.mirror=="x" then v.x=-v.x end
-		if self.args.mirror=="y" then v.y=-v.y end
-		if self.args.mirror=="z" then v.z=-v.z end
-		self.object:set_properties({visual_size=v})
-		-- ROTATE
-		if type(self.args.rotate)=="table" then
-			self.object:set_rotation({
-				x=math.rad(self.args.rotate.x or 0),
-				y=math.rad(self.args.rotate.y or 0),
-				z=math.rad(self.args.rotate.z or 0)
-			})
-		end
-		-- POSIÇÃO ABSOLUTA
-		if self.args.pos then
-			self.object:set_pos(self.args.pos)
-		end
+		update_entity_properties(self)
+		if self.args.pos then self.object:set_pos(self.args.pos) end
 	end,
 	get_staticdata=function(self)
 		return minetest.serialize({node=self.node,args=self.args})
@@ -216,182 +228,235 @@ minetest.register_entity("blockframe:placed", {
 })
 
 --------------------------------------------------
--- SPAWN / UPDATE PREVIEW
+-- CENTRAL PREVIEW LOGIC
 --------------------------------------------------
-function blockframe.spawn_preview(player,args)
-	local name = player:get_player_name()
-	local node = get_wielded_item(player)
-	if not node and blockframe.memory[name] then node=blockframe.memory[name].node end
-	if not node then return end
-	if blockframe.active[name] and blockframe.active[name].entity then
-		local ent = blockframe.active[name].entity
-		ent:set_node(node)
-		ent:apply_args(args)
-		return
+-- Gerencia o movimento de todos os previews ativos de um jogador
+minetest.register_globalstep(function(dtime)
+	for name, data in pairs(blockframe.active) do
+		local player = minetest.get_player_by_name(name)
+		if player then
+			local eye = vector.add(player:get_pos(), {x=0, y=player:get_properties().eye_height or 1.6, z=0})
+			local dir = player:get_look_dir()
+			local ray = minetest.raycast(vector.add(eye, vector.multiply(dir, 0.2)), vector.add(eye, vector.multiply(dir, 6)), true, true)
+			
+			local hit_pos
+			for hit in ray do
+				if hit.type ~= "object" or hit.ref ~= player then
+					hit_pos = hit.intersection_point or hit.above
+					break
+				end
+			end
+			
+			if hit_pos then
+				hit_pos = snap(hit_pos, data.step or 0)
+				hit_pos = vector.add(hit_pos, data.offset or {x=0,y=0,z=0})
+				data.last_pos = hit_pos
+				
+				for _, ent_obj in ipairs(data.entities) do
+					local ent = ent_obj:get_luaentity()
+					if ent then
+						local final_pos = vector.add(hit_pos, ent.rel_pos or {x=0,y=0,z=0})
+						ent_obj:set_pos(final_pos)
+					end
+				end
+			end
+		end
 	end
-	local obj = minetest.add_entity(player:get_pos(),"blockframe:preview",minetest.serialize({node=node}))
-	if not obj then return end
-	blockframe.active[name]={object=obj, entity=nil}
-	minetest.after(0,function()
-		if not blockframe.active[name] then return end
-		if not obj or not obj:get_luaentity() then return end
-		local ent = obj:get_luaentity()
-		ent.player = player
-		ent:set_node(node)
-		ent:apply_args(args)
-		blockframe.active[name].entity = ent
-	end)
+end)
+
+--------------------------------------------------
+-- SPAWN HELPERS
+--------------------------------------------------
+function blockframe.clear_active(name)
+	if blockframe.active[name] then
+		for _, obj in ipairs(blockframe.active[name].entities) do
+			obj:remove()
+		end
+		blockframe.active[name] = nil
+	end
 end
 
 --------------------------------------------------
 -- COMANDOS
 --------------------------------------------------
 minetest.register_chatcommand("blockframe",{
-	description = "Create or update a BlockFrame preview",
 	func=function(name,param)
 		local player = minetest.get_player_by_name(name)
 		if not player then return end
-		blockframe.spawn_preview(player,blockframe.parse_args(param))
+		local args = blockframe.parse_args(param)
+		
+		blockframe.clear_active(name)
+		
+		local node = get_wielded_item(player)
+		if not node and blockframe.memory[name] then node=blockframe.memory[name].node end
+		if not node then return false, "Segure um bloco ou use um anterior." end
+		
+		local obj = minetest.add_entity(player:get_pos(), "blockframe:preview", minetest.serialize({node=node, player_name=name}))
+		if obj then
+			local ent = obj:get_luaentity()
+			ent:apply_args(args)
+			blockframe.active[name] = {
+				type = "single",
+				entities = {obj},
+				step = tonumber(args.step) or 0,
+				offset = parse_vec(args.pos, {x=0,y=0,z=0})
+			}
+		end
 		return true
 	end
 })
 
+minetest.register_chatcommand("blockframe_load", {
+	params = "<nome> [args]",
+	func = function(name, param)
+		local filename, args_str = param:match("^(%S+)%s*(.*)$")
+		if not filename then return false, "Uso: /blockframe_load <nome> [args]" end
+		
+		local filepath = blockframe.world_path .. "/" .. filename .. ".bf"
+		local file = io.open(filepath, "r")
+		if not file then return false, "Arquivo não encontrado." end
+		local data = minetest.deserialize(file:read("*all"))
+		file:close()
+		
+		if not data or not data.entities then return false, "Arquivo inválido." end
+		
+		blockframe.clear_active(name)
+		local global_args = blockframe.parse_args(args_str)
+		local preview_objs = {}
+		
+		for _, e in ipairs(data.entities) do
+			local obj = minetest.add_entity(minetest.get_player_by_name(name):get_pos(), "blockframe:preview", 
+				minetest.serialize({node=e.node, player_name=name, rel_pos=e.rel_pos}))
+			if obj then
+				local ent = obj:get_luaentity()
+				ent:apply_args(e.args, global_args)
+				table.insert(preview_objs, obj)
+			end
+		end
+		
+		blockframe.active[name] = {
+			type = "composite",
+			entities = preview_objs,
+			step = tonumber(global_args.step) or 0,
+			offset = parse_vec(global_args.pos, {x=0,y=0,z=0})
+		}
+		
+		return true, "Preview carregado. Use /blockframe_set para confirmar."
+	end
+})
+
 minetest.register_chatcommand("blockframe_set",{
-	description = "Place the BlockFrame at the preview position",
 	func=function(name)
 		local data = blockframe.active[name]
-		local mem = blockframe.memory[name]
-		if not data and not mem then return false,"Nenhum BlockFrame anterior" end
-		local node,args,pos
-		if data and data.entity and data.entity.last_pos then
-			local ent = data.entity
-			node = ent.node
-			args = table.copy(ent.args or {})
-			pos = vector.new(ent.last_pos)
-			args.pos = pos
-			ent.object:remove()
-			blockframe.active[name]=nil
-		else
-			node = mem.node
-			args = table.copy(mem.args or {})
-			pos = vector.new(mem.pos)
-			args.pos = pos
+		if not data then return false, "Nenhum preview ativo." end
+		
+		local count = 0
+		for _, obj in ipairs(data.entities) do
+			local ent = obj:get_luaentity()
+			if ent then
+				local pos = obj:get_pos()
+				local final_args = table.copy(ent.args)
+				final_args.pos = pos
+				minetest.add_entity(pos, "blockframe:placed", minetest.serialize({node=ent.node, args=final_args}))
+				
+				-- Salvar no memory (apenas o último para single, ou info geral para composite)
+				blockframe.memory[name] = {node=ent.node, args=final_args, pos=pos}
+				count = count + 1
+			end
 		end
-		minetest.add_entity(pos,"blockframe:placed",minetest.serialize({node=node,args=args}))
-		blockframe.memory[name]={node=node,args=table.copy(args),pos=vector.new(pos)}
-		return true,"BlockFrame colocado"
+		
+		blockframe.clear_active(name)
+		return true, "Confirmado: " .. count .. " bloco(s) colocado(s)."
+	end
+})
+
+minetest.register_chatcommand("blockframe_save", {
+	params = "<nome> [radius=N]",
+	func = function(name, param)
+		local filename, args_str = param:match("^(%S+)%s*(.*)$")
+		if not filename then return false, "Uso: /blockframe_save <nome> [radius=N]" end
+		local args = blockframe.parse_args(args_str)
+		local radius = tonumber(args.radius) or 10
+		local player = minetest.get_player_by_name(name)
+		local success, count = blockframe.save_map(filename, player:get_pos(), radius)
+		if success then return true, "Salvo: " .. count .. " blocos." else return false, count end
 	end
 })
 
 minetest.register_chatcommand("blockframe_cancel",{
-	description = "Cancel the active BlockFrame preview",
 	func=function(name)
-		local data = blockframe.active[name]
-		if not data or not data.entity then return false,"Nenhum BlockFrame ativo para cancelar." end
-		local ent = data.entity
-		if ent.object then ent.object:remove() end
-		blockframe.active[name]=nil
-		return true,"BlockFrame preview cancelado."
+		if not blockframe.active[name] then return false, "Nenhum preview para cancelar." end
+		blockframe.clear_active(name)
+		return true, "Preview cancelado."
 	end
 })
 
+-- (Manter comandos blockframe_undo, blockframe_del, blockframe_del_undo e blockframe_help iguais, mas atualizados com as novas tabelas se necessário)
+-- Re-implementando blockframe_save para compatibilidade
+function blockframe.save_map(filename, center_pos, radius)
+	local objs = minetest.get_objects_inside_radius(center_pos, radius)
+	local data = { version = 1, entities = {} }
+	for _, obj in ipairs(objs) do
+		local ent = obj:get_luaentity()
+		if ent and ent.name == "blockframe:placed" then
+			table.insert(data.entities, {
+				node = ent.node,
+				rel_pos = vector.subtract(obj:get_pos(), center_pos),
+				args = ent.args
+			})
+		end
+	end
+	local file = io.open(blockframe.world_path .. "/" .. filename .. ".bf", "w")
+	if file then file:write(minetest.serialize(data)); file:close(); return true, #data.entities end
+	return false, "Erro ao salvar."
+end
+
+-- Re-adicionando comandos de deleção e undo para garantir o arquivo completo
 minetest.register_chatcommand("blockframe_undo",{
-	description = "Cancel the active BlockFrame preview",
 	func=function(name)
 		local mem = blockframe.memory[name]
 		if not mem then return false,"Nenhum bloco para desfazer." end
-		local pos = mem.pos
-		if pos then
-			local objs = minetest.get_objects_inside_radius(pos,0.5)
-			for _,obj in ipairs(objs) do
-				local luaent = obj:get_luaentity()
-				if luaent and luaent.name=="blockframe:placed" then obj:remove(); break end
-			end
-		end
-		local player = minetest.get_player_by_name(name)
-		if player and mem.node then
-			local stack = ItemStack(mem.node)
-			local inv = player:get_inventory()
-			if inv:room_for_item("main",stack) then inv:add_item("main",stack)
-			else minetest.add_item(player:get_pos(),stack) end
+		local objs = minetest.get_objects_inside_radius(mem.pos, 0.5)
+		for _,obj in ipairs(objs) do
+			local luaent = obj:get_luaentity()
+			if luaent and luaent.name=="blockframe:placed" then obj:remove(); break end
 		end
 		blockframe.memory[name]=nil
-		return true,"Último BlockFrame removido e item devolvido."
+		return true,"Desfeito."
 	end
 })
 
 minetest.register_chatcommand("blockframe_del", {
-	description = "Delete BlockFrames around you and return the items. Optional: radius=<number>",
 	func = function(name, param)
 		local player = minetest.get_player_by_name(name)
-		if not player then
-			return false, "Player not found."
-		end
-
-		-- parse args
-		local args = {}
-		for key, value in string.gmatch(param or "", "(%w+)%s*=%s*([^%s]+)") do
-			args[key] = value
-		end
-
-		-- radius handling
-		local radius = tonumber(args.radius)
-		if not radius or radius <= 0 then
-			radius = 2
-		end
-
-		local pos = player:get_pos()
-		local objs = minetest.get_objects_inside_radius(pos, radius)
-
-		local removed = 0
-		local inv = player:get_inventory()
-
+		local args = blockframe.parse_args(param)
+		local radius = tonumber(args.radius) or 2
+		local objs = minetest.get_objects_inside_radius(player:get_pos(), radius)
+		local removed_list = {}
 		for _, obj in ipairs(objs) do
-			if obj ~= player then
-				local ent = obj:get_luaentity()
-				if ent and ent.name == "blockframe:placed" then
-					-- return item
-					if ent.node then
-						local stack = ItemStack(ent.node)
-						if inv and inv:room_for_item("main", stack) then
-							inv:add_item("main", stack)
-						else
-							minetest.add_item(pos, stack)
-						end
-					end
-
-					obj:remove()
-					removed = removed + 1
-				end
+			local ent = obj:get_luaentity()
+			if ent and ent.name == "blockframe:placed" then
+				table.insert(removed_list, {node = ent.node, pos = obj:get_pos(), args = table.copy(ent.args)})
+				obj:remove()
 			end
 		end
+		blockframe.del_history[name] = removed_list
+		return true, "Removido " .. #removed_list .. " blocos."
+	end
+})
 
-		if removed == 0 then
-			return false, "No BlockFrames found within radius " .. radius .. "."
+minetest.register_chatcommand("blockframe_del_undo", {
+	func = function(name)
+		local history = blockframe.del_history[name]
+		if not history then return false, "Nada para desfazer." end
+		for _, item in ipairs(history) do
+			minetest.add_entity(item.pos, "blockframe:placed", minetest.serialize({node=item.node, args=item.args}))
 		end
-
-		return true, "Removed " .. removed .. " BlockFrame(s) within radius " .. radius .. "."
+		blockframe.del_history[name] = nil
+		return true, "Restaurado."
 	end
 })
 
+minetest.register_chatcommand("blockframe_help", { func = function() return true, blockframe.help_text() end })
 
-minetest.register_chatcommand("blockframe_help",{
-	func=function()
-		return true,blockframe.help_text()
-	end
-})
-
---------------------------------------------------
--- SALVA AO SAIR
---------------------------------------------------
-minetest.register_on_leaveplayer(function(player)
-	local name = player:get_player_name()
-	local data = blockframe.active[name]
-	if not data or not data.entity then return end
-	local ent = data.entity
-	if not ent.last_pos then return end
-	blockframe.memory[name]={node=ent.node,args=table.copy(ent.args or {}),pos=vector.new(ent.last_pos)}
-	ent.object:remove()
-	blockframe.active[name]=nil
-end)
-
+minetest.register_on_leaveplayer(function(player) blockframe.clear_active(player:get_player_name()) end)
