@@ -99,6 +99,16 @@ Loads a saved structure as a **composite preview**, allowing global transformati
 
 
 ---
+### Import/Export bf files
+you can save your blockframe build with blockframe_save NAME(default radius is 15 but you can change with radius=number arg)
+the NAME.bf file will be saved on the worlds/WORLDNAME_FOLDER you can share this file,edit etc
+
+to import in the game just use blockframe_load NAME (use the exact name,it could be a file you saved with blockframe_save or a downloaded one)
+
+A .bf file looks like this:
+<img width="1916" height="686" alt="image" src="https://github.com/user-attachments/assets/c47ba0bc-d9c2-49fe-977c-5367d1968f3f" />
+
+---
 
 ### `/blockframe_help`
 Shows the in-game help text.
