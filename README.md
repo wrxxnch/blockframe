@@ -1,44 +1,145 @@
 # BlockFrame
 
-📦 **BlockFrame** is a **Minetest / Mineclonia** mod that lets you **preview, transform, and precisely place blocks or items** before confirming their placement in the world.
+BlockFrame is a powerful Minetest / Mineclonia building tool that lets you preview, transform, precisely place, and visually edit blocks or items before confirming them in the world.
 
-It is designed for **detailed building**, complex structures, scale testing, and accurate positioning.
+It is designed for:
+
+- Detailed building  
+- Complex structures  
+- Scaling experiments  
+- Precise positioning  
+- Advanced world editing  
 
 ---
 
-## Features
+# Core Features
 
 - Real-time preview using entities (`wielditem`)
 - Custom scaling (`size`)
-- Rotation in degrees on X, Y, and Z axes (`rotate`)
+- Rotation in degrees on X, Y, Z axes (`rotate`)
 - Axis-based mirroring (`mirror`)
-- Adjustable aim snapping (grid) (`step`)
+- Adjustable grid snapping (`step`)
 - Absolute or relative positioning (`pos`)
-- Optional collision for previews and placed blocks
-- Support for **composite structures** (save & load)
-- Undo and delete with restoration
-- Works with **any item**, not only blocks
-- Remembers the last used item
+- Optional collision control
+- Composite structures (save & load)
+- Undo system  
+  - `/blockframe_undo`  
+  - `/blockframe_undo_apply`  
+  - `/blockframe_del_undo`
+- Delete & restore system
+- Works with any item
+- Remembers last used item
+- Persistent transformation data
+- Interactive in-world visual gizmo editor
 
 ---
 
-## Commands
+# Interactive Gizmo System
 
-### `/blockframe <args>`
-Creates or updates a **single preview** of the wielded item.
+BlockFrame includes a visual in-world transformation editor similar to professional 3D tools.
 
-**Available args:**
+## Behavior
+
+- `/blockframe_gizmos` shows only Center gizmos
+- Clicking a Center opens:
+  - Move (X, Y, Z)
+  - Rotate (X, Y, Z)
+  - Scale (X, Y, Z)
+- Clicking another BlockFrame Center automatically closes the previous one
+- Running `/blockframe_gizmos` again removes ALL gizmos (including centers)
+- Transformations persist after world reload
+
+---
+
+# Gizmo Controls
+
+### Move
+- Left click → increase axis
+- Right click → decrease axis
+
+### Rotate
+- Left click → increase angle
+- Right click → decrease angle
+
+### Scale
+- Left click → increase size
+- Right click → decrease size
+
+All values use the dynamic `step` system.
+
+---
+
+# Dynamic Step System
+
+BlockFrame supports fully dynamic step control per object.
+
+The `step` value controls:
+
+- Movement increment
+- Rotation increment (degrees)
+- Scaling increment
+
+---
+
+## Global Step
+
+
+/blockframe_gizmos step=5
+
+
+Applies to nearby BlockFrame objects:
+
+- Move → 5 units
+- Rotate → 5°
+- Scale → 5 units
+
+---
+
+## Separate Step Control
+
+
+/blockframe_gizmos step.move=0.25
+/blockframe_gizmos step.rotate=10
+/blockframe_gizmos step.scale=0.1
+
+
+Example:
+
+
+/blockframe_gizmos step.move=0.5
+/blockframe_gizmos step.rotate=5
+/blockframe_gizmos step.scale=0.05
+
+
+Step values are stored per object and persist.
+
+---
+
+# Commands
+
+---
+
+## `/blockframe <args>`
+
+Creates or updates a single preview of the wielded item.
+
+### Available arguments
 
 - `size=x,y,z` — Item scale  
   - 1 value → x=y=z  
   - 2 values → x, y=z  
-- `rotate=x,y,z` — Rotation in degrees
-- `mirror=x|y|z` — Axis mirroring
-- `pos=x,y,z` — Position offset
-- `step=value` — Aim snap (grid)
-- `collision=true|false` — Enable collision
+- `rotate=x,y,z` — Rotation in degrees  
+- `mirror=x|y|z` — Axis mirroring  
+- `pos=x,y,z` — Position offset  
+- `step=value` — Grid snapping and gizmo step  
+- `collision=true|false` — Enable collision  
+- `node=true|false`  
+  - `true` → shows as node  
+  - `false` → shows as wielditem  
 
-**Examples:**
+### Examples
+
+
 /blockframe size=0.5
 /blockframe size=1,0.5 rotate=0,90,0
 /blockframe mirror=x rotate=45
@@ -47,46 +148,60 @@ Creates or updates a **single preview** of the wielded item.
 
 ---
 
-### `/blockframe_set`
-Confirms the active preview and **places the block(s)** in the world.
+## `/blockframe_set`
+
+Confirms the active preview and places the block(s) in the world.
 
 ---
 
-### `/blockframe_cancel`
-Cancels the active preview without placing anything.
+## `/blockframe_cancel`
+
+Cancels the active preview.
 
 ---
 
-### `/blockframe_undo`
-Removes the **last block placed** using BlockFrame.
+## `/blockframe_undo`
+
+Removes the last block placed using BlockFrame.
 
 ---
 
-### `/blockframe_del [radius=N]`
-Deletes placed BlockFrame blocks within a radius.
+## `/blockframe_del [radius=N]`
+
+Deletes placed BlockFrame blocks in a radius.
+
+Example:
+
 
 /blockframe_del radius=3
 
 
 ---
 
-### `/blockframe_del_undo`
-Restores blocks removed by the last `/blockframe_del`.
+## `/blockframe_del_undo`
+
+Restores blocks removed by the last delete.
 
 ---
 
-### `/blockframe_save <name> [radius=N]`
-Saves a **composite structure** (BlockFrame-placed blocks) to a `.bf` file.
+## `/blockframe_save <name> [radius=N]`
+
+Saves a composite structure to a `.bf` file.
+
+Example:
+
 
 /blockframe_save my_house radius=10
 
 
 ---
 
-### `/blockframe_load <name> [args]`
-Loads a saved structure as a **composite preview**, allowing global transformations.
+## `/blockframe_load <name> [args]`
 
-**Accepted global args:**
+Loads a saved structure as a composite preview.
+
+Accepted global args:
+
 - `size`
 - `rotate`
 - `mirror`
@@ -94,73 +209,137 @@ Loads a saved structure as a **composite preview**, allowing global transformati
 - `step`
 - `collision`
 
-**Example:**
+Example:
+
+
 /blockframe_load my_house size=2 rotate=0,90,0
 
 
 ---
-### Import/Export bf files
-you can save your blockframe build with blockframe_save NAME(default radius is 15 but you can change with radius=number arg)
-the NAME.bf file will be saved on the worlds/WORLDNAME_FOLDER you can share this file,edit etc
 
-to import in the game just use blockframe_load NAME (use the exact name,it could be a file you saved with blockframe_save or a downloaded one)
+## `/blockframe_gizmos`
+
+Toggles the visual transformation system.
+
+Also supports dynamic step configuration:
+
+
+/blockframe_gizmos step=5
+/blockframe_gizmos step.move=0.25
+/blockframe_gizmos step.rotate=10
+/blockframe_gizmos step.scale=0.1
+
+
+---
+
+## `/blockframe_help`
+
+Displays in-game help.
+
+---
+
+# Import / Export `.bf` Files
+
+When using:
+
+
+/blockframe_save NAME (default radius is 15 but you can change with radius=number arg)
+
+
+The file `NAME.bf` is saved in:
+
+
+worlds/WORLDNAME/
+
+
+You can:
+
+- Share it
+- Edit it
+- Download structures from others
+
+To load:
+
+
+/blockframe_load NAME (use the exact name,it could be a file you saved with blockframe_save or a downloaded one)
+
+
 
 A .bf file looks like this:
 <img width="1916" height="686" alt="image" src="https://github.com/user-attachments/assets/c47ba0bc-d9c2-49fe-977c-5367d1968f3f" />
 
 ---
 
-### `/blockframe_help`
-Shows the in-game help text.
+
+
+
+# Persistence System
+
+BlockFrame stores:
+
+- Rotation
+- Scale
+- Position offsets
+- Step configuration
+
+Using:
+
+- `get_staticdata()`
+- `on_activate()`
+
+Transformations survive:
+
+- Server restarts
+- World reloads
+- Entity reactivation
 
 ---
 
-## Example Usage
+# File Structure
 
-1. Hold a block or item.
-2. Create a preview:
-/blockframe size=1,0.5 rotate=0,90,0
-
-3. Adjust the position using `pos` or `step`.
-4. Confirm:
-/blockframe_set
-
-5. Undo if needed:
-/blockframe_undo
-
-
----
-
-## Mod Files
 
 blockframe/
-├── init.lua # Complete mod code (preview, entities, commands, save/load)
-├── README.md # This file
-└── LICENSE.txt # CC BY 3.0 License
+├── init.lua
+├── gizmo.lua
+├── README.md
+└── LICENSE.txt
 
 
 ---
 
-## Installation
+# Installation
 
-1. Copy the `blockframe` folder into your Minetest `mods/` directory.
-2. Enable the mod in your world settings.
+1. Place `blockframe` inside your `mods/` directory.
+2. Enable it in world settings.
 3. Start the world.
-4. Use `/blockframe_help` to get started.
+4. Use `/blockframe_help`.
 
 ---
 
-## License
+# License
 
-This mod is distributed under the  
-**Creative Commons Attribution 3.0 (CC BY 3.0)** license.
+Distributed under:
 
-You are free to:
-- Use
-- Modify
-- Redistribute
+Creative Commons Attribution 3.0 (CC BY 3.0)
+
+You may:
+
+- Use  
+- Modify  
+- Redistribute  
 - Use commercially  
 
-As long as proper credit is given to the original author.
+As long as credit is given.
 
 https://creativecommons.org/licenses/by/3.0/
+
+---
+
+# Designed For
+
+- Advanced builders  
+- Map creators  
+- Technical servers  
+- Creative experimentation  
+- Structural prototyping  
+---
