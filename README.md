@@ -11,6 +11,11 @@ It is designed for:
 - Advanced world editing  
 
 ---
+Sites:
+BlockFrame Community: https://wrxxnch.github.io/blockframecommunity
+tutorials:
+https://wrxxnch.github.io/blockframesite
+---
 
 # Core Features
 
