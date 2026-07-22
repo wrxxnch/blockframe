@@ -11,7 +11,7 @@ It is designed for:
 - Advanced world editing  
 
 ---
-Sites:
+Sites:<br>
 BlockFrame Community: https://wrxxnch.github.io/blockframecommunity
 <br>
 tutorials:
