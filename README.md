@@ -266,7 +266,8 @@ To load:
 
 
 A .bf file looks like this:
-<img width="1916" height="686" alt="image" src="https://github.com/user-attachments/assets/c47ba0bc-d9c2-49fe-977c-5367d1968f3f" />
+<img width="1376" height="37" alt="image" src="https://github.com/user-attachments/assets/ca21f34a-9d27-4678-aaba-d12327e2868c" />
+
 
 ---
 
